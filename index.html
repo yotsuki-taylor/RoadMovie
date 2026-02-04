@@ -1,0 +1,2302 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Neon Road Shooter (Prototype)</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; touch-action: none; user-select: none; }
+      canvas { display:block; width:100vw; height:100vh; image-rendering: pixelated; }
+      canvas.hidden { display:none; }
+      .menu{
+        position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+        background:
+          radial-gradient(900px 640px at 50% 35%, rgba(255,59,212,0.18), rgba(0,0,0,0.88) 62%, rgba(0,0,0,0.95)),
+          radial-gradient(700px 520px at 50% 55%, rgba(32,246,255,0.12), rgba(0,0,0,0) 60%),
+          linear-gradient(180deg, rgba(20,0,32,0.75), rgba(0,0,0,0.95));
+      }
+      .menu.hidden{ display:none; }
+      .menuInner{
+        width:min(520px, calc(100vw - 44px));
+        padding: 26px 6px 20px;
+        text-align:center;
+      }
+      .menuTitle{
+        margin:0 0 10px 0;
+        font: 800 28px/1.1 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        color: rgba(255,255,255,0.92);
+        letter-spacing: 0.2px;
+      }
+      .menuSubtitle{
+        margin: 0 auto 12px;
+        width: min(420px, 100%);
+        color: rgba(255,255,255,0.72);
+        font: 13px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        display:none;
+        white-space: pre-line;
+      }
+      .menuBtns{
+        display:flex;
+        flex-direction:column;
+        align-items:stretch;
+        gap:12px;
+        justify-content:center;
+        margin: 10px auto 0;
+        width: min(320px, 100%);
+      }
+      .btn{
+        width: 100%;
+        padding:13px 14px;
+        border-radius:12px;
+        border:1px solid rgba(255,255,255,0.16);
+        background: rgba(0,0,0,0.22);
+        color: rgba(255,255,255,0.92);
+        font: 700 14px/1 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        cursor:pointer;
+        transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+      }
+      .btn:hover{ background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.24); }
+      .btn:active{ transform: translateY(1px) scale(0.99); }
+      .btnPrimary{
+        border-color: rgba(32,246,255,0.35);
+        background: linear-gradient(180deg, rgba(32,246,255,0.12), rgba(0,0,0,0.18));
+      }
+      .btnPrimary:hover{ border-color: rgba(32,246,255,0.55); background: linear-gradient(180deg, rgba(32,246,255,0.18), rgba(0,0,0,0.18)); }
+      .btn:disabled{
+        opacity: 0.45;
+        cursor: default;
+      }
+      .menuFoot{
+        margin-top: 18px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        flex-wrap:wrap;
+        gap:10px 14px;
+        font: 12px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        color: rgba(255,255,255,0.55);
+      }
+      .menuKbd{
+        color: rgba(255,255,255,0.42);
+        white-space: nowrap;
+      }
+      .levelList{
+        margin: 8px auto 0;
+        width: min(320px, 100%);
+        display:none;
+        gap:10px;
+      }
+      .levelList.show{
+        display:flex;
+        flex-direction:column;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="menu" class="menu">
+      <div class="menuInner">
+        <div id="menuTitle" class="menuTitle">Road Movie</div>
+        <div id="menuSubtitle" class="menuSubtitle"></div>
+        <div class="menuBtns">
+          <button id="btnNew" class="btn btnPrimary" type="button">New Game</button>
+          <button id="btnContinue" class="btn" type="button">Continue</button>
+        </div>
+        <div id="levelList" class="levelList"></div>
+        <div class="menuFoot">
+          <div id="menuSaveInfo">Сохранение: —</div>
+          <div class="menuKbd">Enter — Continue</div>
+        </div>
+      </div>
+    </div>
+    <script>
+      // Neon Road Shooter — single-file prototype (Canvas + JS only)
+      // Goal: vertical 9:16, neon "Hotline Miami" vibe, infinite road, player car + autofire, enemies, UI, comic bubbles, particles.
+
+      // =========================
+      // Utilities
+      // =========================
+      const TAU = Math.PI * 2;
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const rand = (a, b) => a + Math.random() * (b - a);
+      const randInt = (a, b) => (a + Math.floor(Math.random() * (b - a + 1))) | 0;
+      const pick = (arr) => arr[(Math.random() * arr.length) | 0];
+      const aabbIntersects = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+      // =========================
+      // CSV + Level data (Google Sheets)
+      // =========================
+      function parseCsv(text) {
+        // Minimal CSV parser with quoted fields support (RFC4180-ish).
+        // Returns: { header: string[], rows: string[][] }
+        const rows = [];
+        let row = [];
+        let field = "";
+        let i = 0;
+        let inQuotes = false;
+
+        const pushField = () => {
+          row.push(field);
+          field = "";
+        };
+        const pushRow = () => {
+          // Skip completely empty trailing rows
+          if (row.length === 1 && row[0] === "") return;
+          rows.push(row);
+          row = [];
+        };
+
+        while (i < text.length) {
+          const ch = text[i];
+          if (inQuotes) {
+            if (ch === '"') {
+              const next = text[i + 1];
+              if (next === '"') {
+                field += '"';
+                i += 2;
+                continue;
+              }
+              inQuotes = false;
+              i++;
+              continue;
+            }
+            field += ch;
+            i++;
+            continue;
+          }
+
+          if (ch === '"') {
+            inQuotes = true;
+            i++;
+            continue;
+          }
+          if (ch === ",") {
+            pushField();
+            i++;
+            continue;
+          }
+          if (ch === "\n") {
+            pushField();
+            pushRow();
+            i++;
+            continue;
+          }
+          if (ch === "\r") {
+            // handle CRLF
+            i++;
+            continue;
+          }
+          field += ch;
+          i++;
+        }
+        pushField();
+        if (row.length) pushRow();
+
+        const header = (rows.shift() ?? []).map((s) => String(s ?? "").trim());
+        return { header, rows };
+      }
+
+      function toNumber(v, fallback = 0) {
+        const n = typeof v === "number" ? v : Number(String(v ?? "").trim().replace(",", "."));
+        return Number.isFinite(n) ? n : fallback;
+      }
+
+      async function fetchTextWithTimeout(url, timeoutMs = 12000) {
+        const ac = new AbortController();
+        const id = setTimeout(() => ac.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, { cache: "no-store", signal: ac.signal });
+          if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+          return await res.text();
+        } catch (e) {
+          if (e && (e.name === "AbortError" || String(e).includes("AbortError"))) {
+            throw new Error(`Timeout after ${Math.round(timeoutMs / 1000)}s`);
+          }
+          throw e;
+        } finally {
+          clearTimeout(id);
+        }
+      }
+
+      function hashString32(s) {
+        // FNV-1a 32-bit
+        let h = 0x811c9dc5;
+        for (let i = 0; i < s.length; i++) {
+          h ^= s.charCodeAt(i);
+          h = Math.imul(h, 0x01000193);
+        }
+        // unsigned
+        return h >>> 0;
+      }
+
+      function withCacheBust(url) {
+        const sep = url.includes("?") ? "&" : "?";
+        return `${url}${sep}cb=${Date.now()}`;
+      }
+
+      async function fetchLevelData(url) {
+        // cache-bust to avoid stale CSV after sheet edits
+        const text = await fetchTextWithTimeout(withCacheBust(url), 12000);
+        const { header, rows } = parseCsv(text);
+
+        const idx = (name) => header.findIndex((h) => h.toLowerCase() === name.toLowerCase());
+        const iTime = idx("Time (sec)");
+        const iType = idx("Type");
+        const iV1 = idx("Value 1 (Type/Who)");
+        const iV2 = idx("Value 2 (HP/Text)");
+        const iX = idx("X (0.0 to 1.0)");
+
+        const events = [];
+        for (const r of rows) {
+          const t = toNumber(r[iTime], NaN);
+          const type = String(r[iType] ?? "").trim().toUpperCase();
+          if (!Number.isFinite(t) || !type) continue;
+
+          const v1 = String(r[iV1] ?? "").trim();
+          const v2 = String(r[iV2] ?? "").trim();
+          const xRaw = iX >= 0 ? r[iX] : "";
+          const x01 = clamp(toNumber(xRaw, toNumber(v1, 0.5)), 0, 1); // fallback: allow X in Value1 if X column missing
+
+          if (type === "ENEMY") {
+            const hp = Math.max(1, (toNumber(v2, 5) | 0) || 5);
+            events.push({ t, type, hp, x01 });
+          } else if (type === "DIALOGUE") {
+            const who = v1 || "Driver";
+            const text = v2 || "";
+            events.push({ t, type, who, text, x01 });
+          } else if (type === "BOSS") {
+            const hp = Math.max(10, (toNumber(v2, 100) | 0) || 100);
+            events.push({ t, type, hp, x01 });
+          }
+        }
+
+        events.sort((a, b) => a.t - b.t);
+        return { events, hash: hashString32(text), fetchedAt: Date.now() };
+      }
+
+      function easeOutCubic(t) {
+        t = clamp(t, 0, 1);
+        return 1 - Math.pow(1 - t, 3);
+      }
+
+      function neonGlow(ctx, color, blur, fn) {
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = blur;
+        fn();
+        ctx.restore();
+      }
+
+      function ensureRoundRect(ctx) {
+        if (ctx.roundRect) return;
+        CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+          const rr = Array.isArray(r) ? r : [r, r, r, r];
+          const [r1, r2, r3, r4] = rr;
+          this.beginPath();
+          this.moveTo(x + r1, y);
+          this.lineTo(x + w - r2, y);
+          this.quadraticCurveTo(x + w, y, x + w, y + r2);
+          this.lineTo(x + w, y + h - r3);
+          this.quadraticCurveTo(x + w, y + h, x + w - r3, y + h);
+          this.lineTo(x + r4, y + h);
+          this.quadraticCurveTo(x, y + h, x, y + h - r4);
+          this.lineTo(x, y + r1);
+          this.quadraticCurveTo(x, y, x + r1, y);
+          return this;
+        };
+      }
+
+      // =========================
+      // Screen: virtual 360x640 (9:16)
+      // =========================
+      class Screen {
+        constructor(canvas, vw = 360, vh = 640) {
+          this.canvas = canvas;
+          this.ctx = canvas.getContext("2d", { alpha: false });
+          ensureRoundRect(this.ctx);
+          this.vw = vw;
+          this.vh = vh;
+          this.dpr = 1;
+          this.scale = 1;
+          this.ox = 0;
+          this.oy = 0;
+          this.resize();
+          addEventListener("resize", () => this.resize(), { passive: true });
+        }
+        resize() {
+          this.dpr = Math.max(1, Math.min(3, devicePixelRatio || 1));
+          const w = innerWidth;
+          const h = innerHeight;
+          this.scale = Math.min(w / this.vw, h / this.vh);
+          this.ox = (w - this.vw * this.scale) * 0.5;
+          this.oy = (h - this.vh * this.scale) * 0.5;
+          this.canvas.width = Math.floor(w * this.dpr);
+          this.canvas.height = Math.floor(h * this.dpr);
+          this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+          this.ctx.imageSmoothingEnabled = true;
+        }
+        beginFrame() {
+          const ctx = this.ctx;
+          ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, innerWidth, innerHeight);
+          ctx.translate(this.ox, this.oy);
+          ctx.scale(this.scale, this.scale);
+        }
+        toVirtual(px, py) {
+          return { x: (px - this.ox) / this.scale, y: (py - this.oy) / this.scale };
+        }
+      }
+
+      // =========================
+      // Background + Road (visual base)
+      // =========================
+      class Background {
+        constructor() {
+          this.t = 0;
+          this.decor = [];
+          for (let i = 0; i < 14; i++) {
+            this.decor.push({
+              kind: Math.random() < 0.75 ? "palm" : "sign",
+              side: Math.random() < 0.5 ? "left" : "right",
+              y: rand(-640, 640),
+              s: rand(0.85, 1.15),
+              variant: Math.random() < 0.5 ? 0 : 1,
+            });
+          }
+        }
+        update(dt, speed = 230) {
+          this.t += dt;
+          for (const d of this.decor) {
+            d.y += speed * dt * 0.6; // parallax slower than road
+            if (d.y > 780) d.y -= 1500;
+          }
+        }
+        draw(ctx) {
+          const g = ctx.createLinearGradient(0, 0, 0, 640);
+          g.addColorStop(0, "#140020");
+          g.addColorStop(0.5, "#080012");
+          g.addColorStop(1, "#070010");
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, 360, 640);
+
+          // Neon swirls
+          ctx.save();
+          ctx.globalAlpha = 0.28;
+          for (let i = 0; i < 5; i++) {
+            const y = ((this.t * 70 + i * 140) % 780) - 100;
+            const gg = ctx.createRadialGradient(80, y, 0, 110, y + 20, 240);
+            gg.addColorStop(0, "rgba(255,59,212,0.28)");
+            gg.addColorStop(0.5, "rgba(32,246,255,0.15)");
+            gg.addColorStop(1, "rgba(0,0,0,0)");
+            ctx.fillStyle = gg;
+            ctx.fillRect(0, y - 240, 360, 520);
+          }
+          ctx.restore();
+
+          // Side panels
+          ctx.fillStyle = "rgba(0,0,0,0.35)";
+          ctx.fillRect(0, 0, 78, 640);
+          ctx.fillRect(360 - 78, 0, 78, 640);
+
+          // Decor
+          for (const d of this.decor) {
+            const x = d.side === "left" ? 18 : 360 - 18;
+            if (d.kind === "palm") this.drawPalm(ctx, x, d.y, d.side, d.s, d.variant);
+            else this.drawSign(ctx, x, d.y, d.side, d.s, d.variant);
+          }
+        }
+        drawPalm(ctx, x, y, side, s, variant) {
+          const dir = side === "left" ? 1 : -1;
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.scale(dir * s, s);
+          const trunk = "#0c0c12";
+          const leaf = variant ? "#20f6ff" : "#35ff78";
+
+          neonGlow(ctx, "rgba(32,246,255,0.35)", 10, () => {
+            ctx.strokeStyle = "rgba(32,246,255,0.35)";
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.bezierCurveTo(6, 18, 10, 48, 4, 88);
+            ctx.stroke();
+          });
+          ctx.strokeStyle = trunk;
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.bezierCurveTo(6, 18, 10, 48, 4, 88);
+          ctx.stroke();
+
+          neonGlow(ctx, leaf, 16, () => {
+            ctx.strokeStyle = leaf;
+            ctx.lineWidth = 3;
+            for (let i = 0; i < 6; i++) {
+              const a = -1.2 + i * 0.45;
+              ctx.beginPath();
+              ctx.moveTo(0, 0);
+              ctx.quadraticCurveTo(Math.cos(a) * 26, Math.sin(a) * 18, Math.cos(a) * 44, Math.sin(a) * 30);
+              ctx.stroke();
+            }
+          });
+          ctx.restore();
+        }
+        drawSign(ctx, x, y, side, s, variant) {
+          const dir = side === "left" ? 1 : -1;
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.scale(dir * s, s);
+          const title = variant ? "ROADHOUSE" : "GAS & GRUB";
+          const neon = variant ? "#ff3bd4" : "#20f6ff";
+
+          ctx.fillStyle = "#0f0f16";
+          ctx.fillRect(-4, 18, 8, 70);
+
+          neonGlow(ctx, neon, 18, () => {
+            ctx.fillStyle = "rgba(15,15,22,0.95)";
+            ctx.strokeStyle = neon;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.roundRect(-62, -10, 124, 30, 8);
+            ctx.fill();
+            ctx.stroke();
+          });
+
+          ctx.fillStyle = "rgba(255,255,255,0.92)";
+          ctx.font = "bold 12px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(title, 0, 5);
+
+          neonGlow(ctx, neon, 12, () => {
+            ctx.fillStyle = neon;
+            for (let i = -50; i <= 50; i += 12) ctx.fillRect(i, -13, 3, 3);
+          });
+          ctx.restore();
+        }
+      }
+
+      class Road {
+        constructor() {
+          this.scroll = 0;
+          this.speed = 230;
+          this.roadX = 180;
+          this.roadW = 204;
+        }
+        update(dt) {
+          // Match road markings speed to the side background decor parallax (see Background.update: speed * 0.6)
+          this.scroll += this.speed * dt * 0.6;
+        }
+        draw(ctx) {
+          const rx = this.roadX - this.roadW / 2;
+          const rw = this.roadW;
+          const g = ctx.createLinearGradient(0, 0, 0, 640);
+          g.addColorStop(0, "#3c3c43");
+          g.addColorStop(1, "#2a2a30");
+          ctx.fillStyle = g;
+          ctx.fillRect(rx, 0, rw, 640);
+
+          // Edge lines
+          neonGlow(ctx, "rgba(32,246,255,0.35)", 10, () => {
+            ctx.strokeStyle = "rgba(255,255,255,0.75)";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(rx + 2, 0);
+            ctx.lineTo(rx + 2, 640);
+            ctx.moveTo(rx + rw - 2, 0);
+            ctx.lineTo(rx + rw - 2, 640);
+            ctx.stroke();
+          });
+
+          // Center dashes
+          const dashH = 36;
+          const gap = 26;
+          const total = dashH + gap;
+          // Move dashes DOWN as scroll increases (same direction as side background decor).
+          let y = (this.scroll % total) - total;
+          ctx.lineWidth = 4;
+          while (y < 660) {
+            ctx.strokeStyle = "rgba(255,255,255,0.75)";
+            ctx.beginPath();
+            ctx.moveTo(this.roadX, y);
+            ctx.lineTo(this.roadX, y + dashH);
+            ctx.stroke();
+            y += total;
+          }
+        }
+        clampToRoad(x, margin = 18) {
+          const rx = this.roadX - this.roadW / 2 + margin;
+          const rw = this.roadW - margin * 2;
+          return clamp(x, rx, rx + rw);
+        }
+        randomRoadX() {
+          return this.clampToRoad(rand(this.roadX - this.roadW * 0.32, this.roadX + this.roadW * 0.32), 22);
+        }
+      }
+
+      // =========================
+      // Particles
+      // =========================
+      class Particle {
+        constructor(x, y, vx, vy, life, size, color, glow = 12, gravity = 0) {
+          this.x = x;
+          this.y = y;
+          this.vx = vx;
+          this.vy = vy;
+          this.life = life;
+          this.maxLife = life;
+          this.size = size;
+          this.color = color;
+          this.glow = glow;
+          this.gravity = gravity;
+          this.rot = rand(0, TAU);
+          this.spin = rand(-4, 4);
+        }
+        update(dt) {
+          this.life -= dt;
+          this.vy += this.gravity * dt;
+          this.x += this.vx * dt;
+          this.y += this.vy * dt;
+          this.rot += this.spin * dt;
+        }
+        draw(ctx) {
+          const t = 1 - this.life / this.maxLife;
+          const a = 1 - easeOutCubic(t);
+          const s = this.size * (1 + t * 0.4);
+          ctx.save();
+          ctx.globalAlpha = a;
+          neonGlow(ctx, this.color, this.glow, () => {
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.rot);
+            ctx.fillStyle = this.color;
+            ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
+          });
+          ctx.restore();
+        }
+        get dead() {
+          return this.life <= 0;
+        }
+      }
+
+      class ParticleSystem {
+        constructor() {
+          this.items = [];
+        }
+        add(p) {
+          this.items.push(p);
+        }
+        burst(x, y, opts = {}) {
+          const count = opts.count ?? 18;
+          const speed = opts.speed ?? 110;
+          const lifeA = opts.lifeA ?? 0.25;
+          const lifeB = opts.lifeB ?? 0.65;
+          const sizeA = opts.sizeA ?? 2;
+          const sizeB = opts.sizeB ?? 6;
+          const colors = opts.colors ?? ["#ffcf4a", "#ff3bd4", "#20f6ff"];
+          const glow = opts.glow ?? 14;
+          const gravity = opts.gravity ?? 0;
+          for (let i = 0; i < count; i++) {
+            const a = rand(0, TAU);
+            const sp = speed * rand(0.35, 1.05);
+            const vx = Math.cos(a) * sp;
+            const vy = Math.sin(a) * sp;
+            const life = rand(lifeA, lifeB);
+            const size = rand(sizeA, sizeB);
+            const color = colors[(Math.random() * colors.length) | 0];
+            this.add(new Particle(x, y, vx, vy, life, size, color, glow, gravity));
+          }
+        }
+        update(dt) {
+          for (const p of this.items) p.update(dt);
+          this.items = this.items.filter((p) => !p.dead);
+        }
+        draw(ctx) {
+          for (const p of this.items) p.draw(ctx);
+        }
+      }
+
+      // =========================
+      // Bullet
+      // =========================
+      class Bullet {
+        constructor(x, y) {
+          this.x = x;
+          this.y = y;
+          this.vy = -520;
+          this.alive = true;
+          this.color = Math.random() < 0.5 ? "#20f6ff" : "#ff3bd4";
+        }
+        update(dt) {
+          this.y += this.vy * dt;
+          if (this.y < -40) this.alive = false;
+        }
+        draw(ctx) {
+          neonGlow(ctx, this.color, 14, () => {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.roundRect(this.x - 2.4, this.y - 7.5, 4.8, 15, 3);
+            ctx.fill();
+          });
+        }
+        get aabb() {
+          return { x: this.x - 3, y: this.y - 9, w: 6, h: 18 };
+        }
+      }
+
+      // =========================
+      // Enemy bullet
+      // =========================
+      class EnemyBullet {
+        constructor(x, y, vx = 0, vy = 330) {
+          this.x = x;
+          this.y = y;
+          this.vx = vx;
+          this.vy = vy;
+          this.alive = true;
+          this.color = "#ff3bd4";
+        }
+        update(dt) {
+          this.x += this.vx * dt;
+          this.y += this.vy * dt;
+          if (this.y > 720 || this.x < -80 || this.x > 440) this.alive = false;
+        }
+        draw(ctx) {
+          neonGlow(ctx, this.color, 14, () => {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.roundRect(this.x - 2.8, this.y - 8.5, 5.6, 17, 3);
+            ctx.fill();
+          });
+        }
+        get aabb() {
+          return { x: this.x - 3.5, y: this.y - 9.5, w: 7, h: 19 };
+        }
+      }
+
+      // =========================
+      // Enemy (van)
+      // =========================
+      class Enemy {
+        constructor(x, y, speed, hp) {
+          this.x = x;
+          this.y = y;
+          this.vy = speed;
+          this.w = 58;
+          this.h = 96;
+          this.hp = hp;
+          this.maxHp = hp;
+          this.alive = true;
+          this.killed = false;
+          this.exploded = false;
+          this.hitFlash = 0;
+          this.isBoss = false;
+        }
+        isFullyOnScreen(vw = 360, vh = 640) {
+          const a = this.aabb;
+          return a.x >= 0 && a.y >= 0 && a.x + a.w <= vw && a.y + a.h <= vh;
+        }
+        update(dt) {
+          this.y += this.vy * dt;
+          this.hitFlash = Math.max(0, this.hitFlash - dt * 7);
+          if (this.y > 760) this.alive = false;
+        }
+        damage(n, vw = 360, vh = 640) {
+          // Don't allow damage until the enemy is fully visible on the screen.
+          if (!this.isFullyOnScreen(vw, vh)) return;
+          this.hp -= n;
+          this.hitFlash = 1;
+          if (this.hp <= 0) {
+            this.killed = true;
+            this.alive = false;
+          }
+        }
+        draw(ctx) {
+          const x = this.x - this.w / 2;
+          const y = this.y - this.h / 2;
+          ctx.save();
+          // Shadow
+          ctx.globalAlpha = 0.8;
+          ctx.fillStyle = "rgba(0,0,0,0.45)";
+          ctx.beginPath();
+          ctx.ellipse(this.x, this.y + 22, 24, 30, 0, 0, TAU);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+
+          // Body
+          neonGlow(ctx, "rgba(255,59,212,0.18)", 12, () => {
+            ctx.fillStyle = this.hitFlash > 0 ? "#333344" : "#0b0b10";
+            ctx.beginPath();
+            ctx.roundRect(x, y, this.w, this.h, 10);
+            ctx.fill();
+          });
+          ctx.strokeStyle = "#1d1d28";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 7, y + 10, this.w - 14, this.h - 20);
+
+          // Windshield glow
+          neonGlow(ctx, "#20f6ff", 12, () => {
+            ctx.fillStyle = "rgba(32,246,255,0.22)";
+            ctx.beginPath();
+            ctx.roundRect(x + 10, y + 14, this.w - 20, 18, 6);
+            ctx.fill();
+          });
+          ctx.strokeStyle = "rgba(32,246,255,0.55)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 10, y + 14, this.w - 20, 18);
+
+          // Rear lights
+          neonGlow(ctx, "#ff3bd4", 14, () => {
+            ctx.fillStyle = "rgba(255,59,212,0.55)";
+            ctx.fillRect(x + 8, y + this.h - 16, 10, 6);
+            ctx.fillRect(x + this.w - 18, y + this.h - 16, 10, 6);
+          });
+
+          // Tiny HP bar
+          const hpw = 40;
+          const hpx = this.x - hpw / 2;
+          const hpy = y - 10;
+          ctx.fillStyle = "rgba(0,0,0,0.35)";
+          ctx.fillRect(hpx, hpy, hpw, 5);
+          ctx.fillStyle = "rgba(53,255,120,0.85)";
+          ctx.fillRect(hpx, hpy, (hpw * this.hp) / this.maxHp, 5);
+
+          ctx.restore();
+        }
+        get aabb() {
+          return { x: this.x - this.w / 2, y: this.y - this.h / 2, w: this.w, h: this.h };
+        }
+      }
+
+      // =========================
+      // Boss (inherits Enemy)
+      // =========================
+      class Boss extends Enemy {
+        constructor(x, y, speed, hp) {
+          super(x, y, speed, hp);
+          this.isBoss = true;
+          this.scale = 2.0;
+          this.w = Math.round(this.w * this.scale);
+          this.h = Math.round(this.h * this.scale);
+          // Phase: enter from top, then stay on-screen until defeated.
+          this.enterSpeed = Math.max(40, speed || 72);
+          this.targetY = 150; // clamped into upper half during update
+          this.entering = true;
+          this.t = 0;
+          this.vx = 32; // gentle horizontal drift while fighting
+          this.fireCd = 1.2;
+        }
+        update(dt) {
+          this.t += dt;
+          this.hitFlash = Math.max(0, this.hitFlash - dt * 5);
+
+          // Boss must remain in the upper half of the screen (accounting for its size).
+          const yMin = this.h / 2 + 10;
+          const yMax = 320 - this.h / 2 - 10;
+          const baseY = clamp(this.targetY, yMin, yMax);
+
+          if (this.entering) {
+            this.y += this.enterSpeed * dt;
+            if (this.y >= baseY) {
+              this.y = baseY;
+              this.entering = false;
+            }
+            return;
+          }
+
+          // Fight phase: stay on-screen, drift left-right a bit
+          const sway = Math.sin(this.t * 0.9) * 10;
+          this.x += (this.vx + sway) * dt;
+          // Keep within road-ish bounds (virtual screen width is 360)
+          const margin = 78 + this.w / 2 + 6; // side panels + half width + small pad
+          this.x = clamp(this.x, margin, 360 - margin);
+          this.y = clamp(baseY + Math.sin(this.t * 1.4) * 3, yMin, yMax); // subtle hover, still clamped
+
+          // Attacks: aimed triple-shot
+          this.fireCd -= dt;
+          if (this.fireCd <= 0) {
+            this.fireCd = rand(0.55, 0.9);
+            const sx = this.x;
+            const sy = this.y + this.h / 2 - 16;
+            const dx = player.x - sx;
+            const dy = (player.y - sy) || 1;
+            const baseAng = Math.atan2(dy, dx);
+            const speed = 330;
+            const spread = 0.22;
+            const offsets = [-22, 0, 22];
+            for (let i = 0; i < 3; i++) {
+              const ang = baseAng + (i - 1) * spread;
+              const vx = Math.cos(ang) * speed;
+              const vy = Math.sin(ang) * speed;
+              enemyBullets.push(new EnemyBullet(sx + offsets[i], sy, vx, vy));
+            }
+          }
+        }
+        draw(ctx) {
+          // Reuse Enemy visuals but scaled up and with a slightly different neon accent
+          const x = this.x - this.w / 2;
+          const y = this.y - this.h / 2;
+          ctx.save();
+          // Shadow
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = "rgba(0,0,0,0.50)";
+          ctx.beginPath();
+          ctx.ellipse(this.x, this.y + 32, 44, 56, 0, 0, TAU);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+
+          // Body
+          neonGlow(ctx, "rgba(32,246,255,0.20)", 14, () => {
+            ctx.fillStyle = this.hitFlash > 0 ? "#2a2a3a" : "#090910";
+            ctx.beginPath();
+            ctx.roundRect(x, y, this.w, this.h, 16);
+            ctx.fill();
+          });
+          ctx.strokeStyle = "rgba(255,59,212,0.45)";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x + 10, y + 14, this.w - 20, this.h - 28);
+
+          // Windshield glow
+          neonGlow(ctx, "#ff3bd4", 16, () => {
+            ctx.fillStyle = "rgba(255,59,212,0.18)";
+            ctx.beginPath();
+            ctx.roundRect(x + 14, y + 18, this.w - 28, 26, 8);
+            ctx.fill();
+          });
+          ctx.strokeStyle = "rgba(255,59,212,0.55)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x + 14, y + 18, this.w - 28, 26);
+
+          // Rear lights
+          neonGlow(ctx, "#20f6ff", 18, () => {
+            ctx.fillStyle = "rgba(32,246,255,0.55)";
+            ctx.fillRect(x + 12, y + this.h - 22, 14, 8);
+            ctx.fillRect(x + this.w - 26, y + this.h - 22, 14, 8);
+          });
+
+          // Remove tiny HP bar for boss (boss has global bar)
+          ctx.restore();
+        }
+      }
+
+      // =========================
+      // Player
+      // =========================
+      class Player {
+        constructor(x, y) {
+          this.x = x;
+          this.y = y;
+          this.w = 50;
+          this.h = 92;
+          this.targetX = x;
+          this.hp = 100;
+          this.maxHp = 100;
+          this.fireCd = 0;
+          this.recoil = 0;
+        }
+        setTargetX(x) {
+          this.targetX = x;
+        }
+        update(dt, road) {
+          this.x = lerp(this.x, this.targetX, 1 - Math.pow(0.0001, dt));
+          this.x = road.clampToRoad(this.x, 22);
+          this.fireCd = Math.max(0, this.fireCd - dt);
+          this.recoil = Math.max(0, this.recoil - dt * 6);
+        }
+        canFire() {
+          return this.fireCd <= 0;
+        }
+        fired() {
+          this.fireCd = 0.11;
+          this.recoil = 1;
+        }
+        draw(ctx) {
+          const rx = (Math.random() - 0.5) * this.recoil * 1.8;
+          const ry = (Math.random() - 0.5) * this.recoil * 1.2;
+          const x = this.x - this.w / 2 + rx;
+          const y = this.y - this.h / 2 + ry;
+
+          ctx.save();
+          // Shadow
+          ctx.globalAlpha = 0.82;
+          ctx.fillStyle = "rgba(0,0,0,0.52)";
+          ctx.beginPath();
+          ctx.ellipse(this.x + rx, this.y + 26 + ry, 20, 28, 0, 0, TAU);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+
+          // --- Cabriolet body (open top) ---
+          neonGlow(ctx, "#ff3bd4", 14, () => {
+            ctx.fillStyle = "#b80f2a";
+            ctx.beginPath();
+            ctx.roundRect(x, y, this.w, this.h, 12);
+            ctx.fill();
+          });
+          ctx.fillStyle = "#ff2e46";
+          ctx.fillRect(x + 7, y + 10, this.w - 14, 10);
+
+          // Open cabin cutout
+          ctx.fillStyle = "rgba(0,0,0,0.38)";
+          ctx.beginPath();
+          ctx.roundRect(x + 9, y + 24, this.w - 18, 34, 10);
+          ctx.fill();
+
+          // Windshield (thin, front-only)
+          neonGlow(ctx, "#20f6ff", 12, () => {
+            ctx.strokeStyle = "rgba(32,246,255,0.65)";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(x + 10, y + 26);
+            ctx.lineTo(x + this.w - 10, y + 26);
+            ctx.stroke();
+          });
+
+          // Seats
+          ctx.fillStyle = "rgba(20,6,10,0.9)";
+          ctx.beginPath();
+          ctx.roundRect(x + 12, y + 40, (this.w - 24) / 2 - 3, 14, 5);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.roundRect(x + 12 + (this.w - 24) / 2 + 3, y + 40, (this.w - 24) / 2 - 3, 14, 5);
+          ctx.fill();
+
+          // Two people inside (driver + gunner)
+          const headR = 5.5;
+          const driverX = x + 18;
+          const gunnerX = x + this.w - 18;
+          const headY = y + 34;
+
+          // Heads
+          ctx.fillStyle = "rgba(255,255,255,0.78)";
+          ctx.beginPath();
+          ctx.arc(driverX, headY, headR, 0, TAU);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(gunnerX, headY, headR, 0, TAU);
+          ctx.fill();
+
+          // Driver shades + gunner brow (tiny nod to UI avatars)
+          ctx.fillStyle = "rgba(0,0,0,0.65)";
+          ctx.fillRect(driverX - 6, headY - 2, 12, 3);
+          ctx.strokeStyle = "rgba(0,0,0,0.8)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(gunnerX - 5, headY - 3);
+          ctx.lineTo(gunnerX, headY - 1);
+          ctx.lineTo(gunnerX + 5, headY - 3);
+          ctx.stroke();
+
+          // Shoulders
+          ctx.fillStyle = "rgba(255,255,255,0.22)";
+          ctx.beginPath();
+          ctx.roundRect(driverX - 8, headY + 6, 16, 10, 5);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.roundRect(gunnerX - 8, headY + 6, 16, 10, 5);
+          ctx.fill();
+
+          ctx.fillStyle = "#2a0a12";
+          ctx.fillRect(x - 6, y + 16, 10, 18);
+          ctx.fillRect(x - 6, y + this.h - 34, 10, 18);
+          ctx.fillRect(x + this.w - 4, y + 16, 10, 18);
+          ctx.fillRect(x + this.w - 4, y + this.h - 34, 10, 18);
+
+          ctx.restore();
+        }
+        get muzzlePoints() {
+          return [
+            { x: this.x - 14, y: this.y - this.h / 2 + 8 },
+            { x: this.x + 14, y: this.y - this.h / 2 + 8 },
+          ];
+        }
+        get aabb() {
+          return { x: this.x - this.w / 2, y: this.y - this.h / 2, w: this.w, h: this.h };
+        }
+      }
+
+      // =========================
+      // UI
+      // =========================
+      class UI {
+        draw(ctx, hp01, opts = {}) {
+          const levelProgress01 = clamp(opts.levelProgress01 ?? 0, 0, 1);
+          const boss = opts.boss ?? null;
+          const levelNet = opts.levelNet ?? null;
+          const barW = 120;
+          const barH = 12;
+          this.drawAvatar(ctx, 16, 16, "#ff3bd4", "driver");
+          this.drawHpBar(ctx, 44, 16, barW, barH, hp01);
+          this.drawAvatar(ctx, 360 - 16, 16, "#20f6ff", "rico");
+          this.drawHpBar(ctx, 360 - 44 - barW, 16, barW, barH, clamp(hp01 * 0.9 + 0.08, 0, 1));
+
+          // Level progress bar (thin neon line under HP bars)
+          const px = 10;
+          const py = 38;
+          const pw = 340;
+          const ph = 2;
+          ctx.save();
+          ctx.fillStyle = "rgba(255,255,255,0.10)";
+          ctx.fillRect(px, py, pw, ph);
+          neonGlow(ctx, "#20f6ff", 10, () => {
+            ctx.fillStyle = "rgba(32,246,255,0.75)";
+            ctx.fillRect(px, py, pw * levelProgress01, ph);
+          });
+          ctx.restore();
+
+          // Boss HP bar (top, during fight)
+          if (boss && boss.alive && !boss.killed) {
+            const bx = 30;
+            const by = 46;
+            const bw = 300;
+            const bh = 10;
+            const t = boss.maxHp > 0 ? clamp(boss.hp / boss.maxHp, 0, 1) : 0;
+            ctx.save();
+            neonGlow(ctx, "#ff3bd4", 14, () => {
+              ctx.fillStyle = "rgba(0,0,0,0.45)";
+              ctx.beginPath();
+              ctx.roundRect(bx, by, bw, bh, 6);
+              ctx.fill();
+              ctx.strokeStyle = "rgba(255,255,255,0.18)";
+              ctx.lineWidth = 1;
+              ctx.stroke();
+              ctx.fillStyle = "rgba(255,59,212,0.78)";
+              ctx.beginPath();
+              ctx.roundRect(bx, by, bw * t, bh, 6);
+              ctx.fill();
+            });
+            ctx.fillStyle = "rgba(255,255,255,0.72)";
+            ctx.font = "800 10px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "bottom";
+            ctx.fillText("BOSS", 180, by - 2);
+            ctx.restore();
+          }
+
+          // Level data sync indicator (tiny)
+          if (levelNet && levelNet.lastFetchedAt) {
+            const age = Math.max(0, (Date.now() - levelNet.lastFetchedAt) / 1000);
+            ctx.save();
+            ctx.fillStyle = "rgba(255,255,255,0.45)";
+            ctx.font = "10px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+            ctx.textAlign = "right";
+            ctx.textBaseline = "top";
+            const label = levelNet.lastUpdatedAt && levelNet.lastUpdatedAt === levelNet.lastFetchedAt ? "SYNC" : "FETCH";
+            ctx.fillText(`${label} ${age.toFixed(0)}s • U`, 350, 58);
+            ctx.restore();
+          }
+
+          ctx.save();
+          ctx.globalAlpha = 0.22;
+          ctx.strokeStyle = "rgba(255,255,255,0.5)";
+          ctx.beginPath();
+          ctx.moveTo(10, 36);
+          ctx.lineTo(350, 36);
+          ctx.stroke();
+          ctx.restore();
+        }
+        drawHpBar(ctx, x, y, w, h, t) {
+          const bg = "rgba(0,0,0,0.55)";
+          const fg = "#35ff78";
+          ctx.save();
+          ctx.translate(x, y);
+          neonGlow(ctx, fg, 12, () => {
+            ctx.fillStyle = bg;
+            ctx.beginPath();
+            ctx.roundRect(0, 0, w, h, 6);
+            ctx.fill();
+            ctx.strokeStyle = "rgba(255,255,255,0.22)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = fg;
+            ctx.beginPath();
+            ctx.roundRect(0, 0, w * clamp(t, 0, 1), h, 6);
+            ctx.fill();
+          });
+          ctx.restore();
+        }
+        drawAvatar(ctx, cx, cy, neon, kind) {
+          const r = 16;
+          ctx.save();
+          ctx.translate(cx, cy);
+          neonGlow(ctx, neon, 18, () => {
+            ctx.fillStyle = "rgba(10,10,12,0.85)";
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, TAU);
+            ctx.fill();
+            ctx.strokeStyle = neon;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+          });
+          // Placeholder face
+          ctx.fillStyle = "rgba(255,255,255,0.75)";
+          ctx.beginPath();
+          ctx.arc(0, 2, 7, 0, TAU);
+          ctx.fill();
+          ctx.fillStyle = "rgba(0,0,0,0.65)";
+          if (kind === "driver") {
+            // shades
+            ctx.fillRect(-8, -2, 16, 4);
+            ctx.fillRect(-3, -2, 6, 4);
+          } else {
+            // angry brow
+            ctx.beginPath();
+            ctx.moveTo(-6, -3);
+            ctx.lineTo(0, -1);
+            ctx.lineTo(6, -3);
+            ctx.strokeStyle = "rgba(0,0,0,0.8)";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+
+      // =========================
+      // Dialogue bubbles (comic)
+      // =========================
+      class DialogueManager {
+        constructor() {
+          this.lines = [
+            { who: "Driver", text: "Rico, lock and load!" },
+            { who: "Rico", text: "That van's toast!" },
+            { who: "Driver", text: "Stay on the stripe. Keep firing!" },
+            { who: "Rico", text: "Neon nights, hot lead." },
+            { who: "Driver", text: "Gas & Grub after this!" },
+            { who: "Rico", text: "Roadhouse can wait. Focus!" },
+          ];
+          this.i = 0;
+          this.cooldown = rand(5, 9);
+          this.active = null;
+          this.auto = true;
+        }
+        show(who, text, opts = {}) {
+          const life = opts.life ?? 3.6;
+          const ax = opts.anchorX ?? 180;
+          const ay = opts.anchorY ?? 540;
+          this.active = { who: who || "Driver", text: text || "", t: 0, life, ax, ay };
+          this.cooldown = rand(6, 10);
+        }
+        update(dt, anchorX, anchorY) {
+          if (this.active) {
+            this.active.t += dt;
+            this.active.ax = lerp(this.active.ax, anchorX, 0.18);
+            this.active.ay = lerp(this.active.ay, anchorY, 0.18);
+            if (this.active.t > this.active.life) this.active = null;
+            return;
+          }
+          if (!this.auto) return;
+          this.cooldown -= dt;
+          if (this.cooldown <= 0) {
+            const d = this.lines[this.i++ % this.lines.length];
+            this.active = { who: d.who, text: d.text, t: 0, life: rand(2.8, 4.2), ax: anchorX, ay: anchorY };
+            this.cooldown = rand(5, 10);
+          }
+        }
+        draw(ctx) {
+          if (!this.active) return;
+          const who = this.active.who;
+          const text = this.active.text;
+          const isRico = who === "Rico";
+          const border = isRico ? "#20f6ff" : "#ff3bd4";
+
+          const tIn = clamp(this.active.t / 0.2, 0, 1);
+          const tOut = clamp((this.active.life - this.active.t) / 0.25, 0, 1);
+          const alpha = Math.min(tIn, tOut);
+          const pop = 0.92 + 0.08 * easeOutCubic(tIn);
+
+          const bx = this.active.ax + (isRico ? 56 : -56);
+          const by = this.active.ay - 84;
+          const padX = 10;
+          const padY = 10;
+          const maxW = 210;
+
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.translate(bx, by);
+          ctx.scale(pop, pop);
+
+          // Wrap text
+          ctx.font = "13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+          const words = (text || "").split(/\s+/g);
+          const lines = [];
+          let line = "";
+          for (const w of words) {
+            const test = line ? line + " " + w : w;
+            if (ctx.measureText(test).width > maxW && line) {
+              lines.push(line);
+              line = w;
+            } else line = test;
+          }
+          if (line) lines.push(line);
+
+          ctx.font = "bold 13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+          const whoW = ctx.measureText(who + ":").width;
+          ctx.font = "13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+
+          const lineH = 16;
+          const textH = lines.length * lineH;
+          const w = Math.max(120, Math.min(maxW + padX * 2, whoW + maxW + padX * 2));
+          const h = padY * 2 + textH + 18;
+
+          neonGlow(ctx, border, 14, () => {
+            ctx.fillStyle = "rgba(255,255,255,0.92)";
+            ctx.strokeStyle = border;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.roundRect(-w / 2, -h / 2, w, h, 12);
+            ctx.fill();
+            ctx.stroke();
+          });
+
+          // Tail
+          const tailX = isRico ? -w * 0.25 : w * 0.25;
+          const tailY = h / 2 - 10;
+          ctx.fillStyle = "rgba(255,255,255,0.92)";
+          ctx.strokeStyle = border;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(tailX, tailY);
+          ctx.lineTo(tailX + (isRico ? -16 : 16), tailY + 18);
+          ctx.lineTo(tailX + (isRico ? 10 : -10), tailY + 12);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Text
+          ctx.fillStyle = "rgba(0,0,0,0.85)";
+          ctx.font = "bold 13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+          ctx.fillText(who + ":", -w / 2 + padX, -h / 2 + 20);
+          ctx.font = "13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+          for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], -w / 2 + padX, -h / 2 + 38 + i * lineH);
+
+          ctx.restore();
+        }
+      }
+
+      // =========================
+      // CRT overlay
+      // =========================
+      class CRT {
+        draw(ctx) {
+          ctx.save();
+          // Scanlines
+          ctx.globalAlpha = 0.12;
+          ctx.fillStyle = "rgba(0,0,0,0.35)";
+          for (let y = 0; y < 640; y += 3) ctx.fillRect(0, y, 360, 1);
+          // Vignette + noise
+          ctx.globalAlpha = 0.18;
+          const vg = ctx.createRadialGradient(180, 320, 80, 180, 320, 300);
+          vg.addColorStop(0, "rgba(0,0,0,0)");
+          vg.addColorStop(1, "rgba(0,0,0,0.65)");
+          ctx.fillStyle = vg;
+          ctx.fillRect(0, 0, 360, 640);
+          ctx.globalAlpha = 0.08;
+          ctx.fillStyle = "#fff";
+          for (let i = 0; i < 160; i++) ctx.fillRect((Math.random() * 360) | 0, (Math.random() * 640) | 0, 1, 1);
+          ctx.restore();
+        }
+      }
+
+      // =========================
+      // Game
+      // =========================
+      const canvas = document.getElementById("c");
+      const screen = new Screen(canvas, 360, 640);
+      const bg = new Background();
+      const road = new Road();
+      const fx = new ParticleSystem();
+      const player = new Player(180, 540);
+      const ui = new UI();
+      const dialog = new DialogueManager();
+      const crt = new CRT();
+
+      const bullets = [];
+      const enemyBullets = [];
+      const enemies = [];
+      let score = 0;
+      const SHEETS_PUB_URL =
+        "https://docs.google.com/spreadsheets/d/e/2PACX-1vQOb_HXKPSQSdBSr-tULfElVcwgKz8lVfmxjKvAgCB69wIT3ai5diu6vZPlRj4GwDYRP0C8elwhcmX0/pub?output=csv";
+      const MAX_LEVELS = 3;
+
+      function pad3(n) {
+        return String((n | 0) + 1).padStart(3, "0");
+      }
+      function levelSheetName(levelIndex) {
+        return `level${pad3(levelIndex)}`;
+      }
+      function extractSheetsKey(pubUrl) {
+        const m = String(pubUrl || "").match(/spreadsheets\/d\/e\/([^/]+)/i);
+        return m ? m[1] : null;
+      }
+      const SHEETS_KEY = extractSheetsKey(SHEETS_PUB_URL);
+      let sheetGidMap = null; // { [lowerSheetName]: gidString }
+      async function ensureSheetGidMap() {
+        if (sheetGidMap) return sheetGidMap;
+        sheetGidMap = {};
+        if (!SHEETS_KEY) return sheetGidMap;
+        try {
+          const html = await fetchTextWithTimeout(withCacheBust(`https://docs.google.com/spreadsheets/d/e/${SHEETS_KEY}/pubhtml`), 12000);
+          // Newer pubhtml embeds tabs in JS like:
+          // items.push({name: "level002", pageUrl: "...gid=117...", gid: "117..." ...})
+          const reJs = /items\.push\(\{name:\s*"([^"]+)"[\s\S]{0,240}?gid:\s*"(\d+)"/gi;
+          let m;
+          while ((m = reJs.exec(html))) {
+            const name = String(m[1] || "").trim().toLowerCase();
+            const gid = String(m[2] || "").trim();
+            if (name && gid) sheetGidMap[name] = gid;
+          }
+
+          // Fallback: older markup tab links like href="#gid=0">level001</a>
+          if (!Object.keys(sheetGidMap).length) {
+            const reHref = /href="#gid=(\d+)"[^>]*>([^<]+)<\/a>/gi;
+            while ((m = reHref.exec(html))) {
+              const gid = m[1];
+              const name = String(m[2] || "").trim().toLowerCase();
+              if (name) sheetGidMap[name] = gid;
+            }
+          }
+        } catch {
+          // ignore; we'll use fallback urls
+        }
+        return sheetGidMap;
+      }
+
+      async function buildLevelCsvCandidates(levelIndex) {
+        const sheet = levelSheetName(levelIndex);
+        const candidates = [];
+        const map = await ensureSheetGidMap();
+        const gid = map ? map[String(sheet).toLowerCase()] : null;
+        if (SHEETS_KEY && gid) candidates.push(`https://docs.google.com/spreadsheets/d/e/${SHEETS_KEY}/pub?output=csv&gid=${encodeURIComponent(gid)}`);
+        // Some published sheets accept sheet name directly
+        if (SHEETS_KEY) candidates.push(`https://docs.google.com/spreadsheets/d/e/${SHEETS_KEY}/pub?output=csv&sheet=${encodeURIComponent(sheet)}`);
+        // gviz (may be blocked depending on publish settings, keep as fallback)
+        if (SHEETS_KEY) candidates.push(`https://docs.google.com/spreadsheets/d/e/${SHEETS_KEY}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}`);
+        // last resort: original published csv (usually first tab only)
+        candidates.push(SHEETS_PUB_URL);
+        return candidates;
+      }
+
+      async function fetchLevelDataForLevel(levelIndex) {
+        const urls = await buildLevelCsvCandidates(levelIndex);
+        let lastErr = null;
+        for (const url of urls) {
+          try {
+            const data = await fetchLevelData(url);
+            // Basic sanity: must have some events
+            if (data && Array.isArray(data.events) && data.events.length >= 1) {
+              data.sourceUrl = url;
+              return data;
+            }
+            // If parsed 0 events, still allow (empty level), but prefer earlier candidates first
+            data.sourceUrl = url;
+            return data;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        throw lastErr || new Error("Failed to load level data");
+      }
+
+      // =========================
+      // LevelManager
+      // =========================
+      class LevelManager {
+        constructor(opts = {}) {
+          this.duration = opts.duration ?? 180;
+          this.levelIndex = 0;
+          this.elapsedTime = 0;
+          this.events = [];
+          this.cursor = 0;
+          this.ready = false;
+          this.loading = false;
+          this.boss = null;
+          this.bossEverSpawned = false;
+          this.completed = false;
+          this.onComplete = opts.onComplete ?? (() => {});
+          this.completing = false;
+          this.completeAcc = 0;
+          this.completeDelay = opts.completeDelay ?? 1.6;
+          this.onBossDefeatedFx = opts.onBossDefeatedFx ?? (() => {});
+
+          // Auto-sync level data (so sheet edits apply without restarting)
+          this.autoSync = opts.autoSync ?? true;
+          this.syncInterval = opts.syncInterval ?? 8; // seconds
+          this.syncAcc = 0;
+          this.lastHash = 0;
+          this.lastFetchedAt = 0;
+          this.lastUpdatedAt = 0;
+          this.lastSyncError = "";
+          this.sourceUrl = "";
+        }
+        async loadLevel(index = 0) {
+          this.levelIndex = index;
+          this.elapsedTime = 0;
+          this.cursor = 0;
+          this.events = [];
+          this.boss = null;
+          this.bossEverSpawned = false;
+          this.completed = false;
+          this.completing = false;
+          this.completeAcc = 0;
+          this.ready = false;
+          this.loading = true;
+
+          const data = await fetchLevelDataForLevel(index);
+          this.events = data.events || [];
+          this.lastHash = data.hash || 0;
+          this.lastFetchedAt = data.fetchedAt || Date.now();
+          this.lastUpdatedAt = this.lastFetchedAt;
+          this.lastSyncError = "";
+          this.sourceUrl = data.sourceUrl || "";
+          this.ready = true;
+          this.loading = false;
+        }
+        resetTimeline() {
+          this.elapsedTime = 0;
+          this.cursor = 0;
+          this.completed = false;
+          this.boss = null;
+          this.bossEverSpawned = false;
+          this.completing = false;
+          this.completeAcc = 0;
+        }
+        get progress01() {
+          return clamp(this.elapsedTime / this.duration, 0, 1);
+        }
+        roadXFrom01(road, x01) {
+          const rx = road.roadX - road.roadW / 2;
+          const x = rx + clamp(x01, 0, 1) * road.roadW;
+          return road.clampToRoad(x, 22);
+        }
+        spawnEnemyAt(road, x01, hp) {
+          const x = this.roadXFrom01(road, x01);
+          enemies.push(new Enemy(x, -70, rand(150, 220), Math.max(1, hp | 0)));
+        }
+        spawnBossAt(road, x01, hp) {
+          const x = this.roadXFrom01(road, x01);
+          const boss = new Boss(x, -140, 72, Math.max(10, hp | 0));
+          this.boss = boss;
+          this.bossEverSpawned = true;
+          enemies.push(boss);
+        }
+        triggerEvent(ev, road) {
+          if (ev.type === "ENEMY") {
+            this.spawnEnemyAt(road, ev.x01 ?? 0.5, ev.hp ?? 5);
+          } else if (ev.type === "DIALOGUE") {
+            dialog.show(ev.who ?? "Driver", ev.text ?? "", { anchorX: player.x, anchorY: player.y });
+          } else if (ev.type === "BOSS") {
+            // Only spawn once
+            if (!this.bossEverSpawned && (!this.boss || !this.boss.alive)) this.spawnBossAt(road, ev.x01 ?? 0.5, ev.hp ?? 100);
+          }
+        }
+        async syncLevelData() {
+          if (this.loading) return;
+          this.loading = true;
+          try {
+            const data = this.sourceUrl ? await fetchLevelData(this.sourceUrl) : await fetchLevelDataForLevel(this.levelIndex);
+            const nextHash = data.hash || 0;
+            this.lastFetchedAt = data.fetchedAt || Date.now();
+            if (nextHash && nextHash !== this.lastHash) {
+              this.events = data.events || [];
+              this.lastHash = nextHash;
+              this.lastUpdatedAt = this.lastFetchedAt;
+              this.lastSyncError = "";
+              if (!this.sourceUrl) this.sourceUrl = data.sourceUrl || this.sourceUrl;
+              // Recompute cursor so we don't re-trigger past events.
+              let c = 0;
+              while (c < this.events.length && this.events[c].t <= this.elapsedTime + 1e-6) c++;
+              this.cursor = c;
+            }
+          } catch (e) {
+            this.lastSyncError = (e && e.message) || String(e || "sync error");
+          } finally {
+            this.loading = false;
+          }
+        }
+        beginCompletion() {
+          if (this.completing || this.completed) return;
+          this.completing = true;
+          this.completeAcc = 0;
+          // stop stray boss bullets immediately
+          enemyBullets.length = 0;
+          this.onBossDefeatedFx(this.boss);
+        }
+        update(dt, road) {
+          if (this.completed) return;
+          if (!this.ready) return;
+
+          if (this.completing) {
+            this.completeAcc += dt;
+            if (this.completeAcc >= this.completeDelay) {
+              this.completed = true;
+              this.onComplete({ levelIndex: this.levelIndex });
+            }
+            return;
+          }
+
+          this.elapsedTime += dt;
+
+          // Periodically refresh the sheet so edits apply automatically.
+          if (this.autoSync && this.syncInterval > 0) {
+            this.syncAcc += dt;
+            if (this.syncAcc >= this.syncInterval) {
+              this.syncAcc = 0;
+              // fire-and-forget
+              this.syncLevelData();
+            }
+          }
+
+          // Fire all events up to current time
+          while (this.cursor < this.events.length && this.events[this.cursor].t <= this.elapsedTime + 1e-6) {
+            const ev = this.events[this.cursor++];
+            this.triggerEvent(ev, road);
+          }
+
+          // Victory: boss destroyed
+          if (this.boss && this.boss.killed) {
+            this.beginCompletion();
+          }
+        }
+      }
+
+      let levelManager = null;
+
+      // =========================
+      // Menu + Save/Load
+      // =========================
+      const SAVE_KEY = "roadmovie.save.v1";
+      const PROGRESS_KEY = "roadmovie.progress.v1";
+      const menuEl = document.getElementById("menu");
+      const menuTitleEl = document.getElementById("menuTitle");
+      const menuSubtitleEl = document.getElementById("menuSubtitle");
+      const menuSaveInfoEl = document.getElementById("menuSaveInfo");
+      const btnNewEl = document.getElementById("btnNew");
+      const btnContinueEl = document.getElementById("btnContinue");
+      const levelListEl = document.getElementById("levelList");
+      // (hint removed)
+
+      let gameMode = "menu"; // "menu" | "playing"
+      let menuMode = "main"; // "main" | "levelSelect" | "levelComplete" | "loading"
+      let saveAcc = 0;
+
+      function safeJsonParse(s) {
+        try {
+          return JSON.parse(s);
+        } catch {
+          return null;
+        }
+      }
+
+      function loadSave() {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (!raw) return null;
+        const data = safeJsonParse(raw);
+        if (!data || (data.v !== 1 && data.v !== 2)) return null;
+        return data;
+      }
+
+      function loadProgress() {
+        const raw = localStorage.getItem(PROGRESS_KEY);
+        if (!raw) return { v: 1, maxCompleted: -1 };
+        const p = safeJsonParse(raw);
+        if (!p || p.v !== 1) return { v: 1, maxCompleted: -1 };
+        return { v: 1, maxCompleted: Math.max(-1, (p.maxCompleted ?? -1) | 0) };
+      }
+      function saveProgress(p) {
+        try {
+          localStorage.setItem(PROGRESS_KEY, JSON.stringify({ v: 1, maxCompleted: p.maxCompleted | 0 }));
+        } catch {
+          // ignore
+        }
+      }
+      function markLevelCompleted(levelIndex) {
+        const p = loadProgress();
+        p.maxCompleted = Math.max(p.maxCompleted, levelIndex | 0);
+        saveProgress(p);
+      }
+
+      function renderLevelSelect() {
+        if (!levelListEl) return;
+        const p = loadProgress();
+        const unlockedMax = clamp(p.maxCompleted + 1, 0, MAX_LEVELS - 1);
+        levelListEl.innerHTML = "";
+        for (let i = 0; i < MAX_LEVELS; i++) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn";
+          const num = pad3(i);
+          const passed = i <= p.maxCompleted;
+          const unlocked = i <= unlockedMax;
+          b.textContent = passed ? `LEVEL ${num} ✓` : `LEVEL ${num}`;
+          b.disabled = !unlocked;
+          b.addEventListener("click", () => {
+            startLevel(i, { mode: "new" });
+          });
+          levelListEl.appendChild(b);
+        }
+        levelListEl.classList.add("show");
+      }
+
+      function formatSaveTime(ts) {
+        try {
+          const d = new Date(ts);
+          const hh = String(d.getHours()).padStart(2, "0");
+          const mm = String(d.getMinutes()).padStart(2, "0");
+          return `${hh}:${mm}`;
+        } catch {
+          return "—";
+        }
+      }
+
+      function updateMenuUi() {
+        if (menuMode !== "main") {
+          btnContinueEl.disabled = false;
+          menuSaveInfoEl.textContent = "";
+          return;
+        }
+        const s = loadSave();
+        const has = !!s;
+        btnContinueEl.disabled = !has;
+        if (!has) menuSaveInfoEl.textContent = "Сохранение: нет";
+        else {
+          const t = formatSaveTime(s.ts);
+          menuSaveInfoEl.textContent = `Сохранение: есть • ${t} • SCORE ${s.score ?? 0}`;
+        }
+      }
+
+      function showMenu(opts = {}) {
+        const title = opts.title ?? "Road Movie";
+        const subtitle = opts.subtitle ?? "";
+        menuMode = opts.mode ?? "main";
+        menuTitleEl.textContent = title;
+        menuSubtitleEl.textContent = subtitle;
+        menuSubtitleEl.style.display = subtitle ? "" : "none";
+
+        // Button layout by menu mode
+        if (menuMode === "main") {
+          btnNewEl.textContent = "Играть";
+          btnContinueEl.textContent = "Continue";
+          btnNewEl.disabled = false;
+          btnContinueEl.style.display = "";
+          if (levelListEl) levelListEl.classList.remove("show");
+        } else if (menuMode === "loading") {
+          btnNewEl.textContent = "Загрузка...";
+          btnContinueEl.textContent = "Подождите";
+          btnNewEl.disabled = true;
+          btnContinueEl.disabled = true;
+          btnContinueEl.style.display = "";
+          if (levelListEl) levelListEl.classList.remove("show");
+        } else if (menuMode === "levelSelect") {
+          btnNewEl.textContent = "Назад";
+          btnContinueEl.textContent = "—";
+          btnNewEl.disabled = false;
+          btnContinueEl.disabled = true;
+          btnContinueEl.style.display = "none";
+          renderLevelSelect();
+        } else if (menuMode === "levelComplete") {
+          btnNewEl.textContent = "Next Level";
+          btnContinueEl.textContent = "Restart";
+          btnNewEl.disabled = false;
+          btnContinueEl.disabled = false;
+          btnContinueEl.style.display = "";
+          if (levelListEl) levelListEl.classList.remove("show");
+        }
+        menuEl.classList.remove("hidden");
+        canvas.classList.add("hidden");
+        updateMenuUi();
+        gameMode = "menu";
+      }
+
+      function hideMenu() {
+        menuEl.classList.add("hidden");
+        canvas.classList.remove("hidden");
+      }
+
+      function clearSave() {
+        localStorage.removeItem(SAVE_KEY);
+        updateMenuUi();
+      }
+
+      function snapshotState() {
+        return {
+          v: 2,
+          ts: Date.now(),
+          score,
+          level: levelManager
+            ? { index: levelManager.levelIndex ?? 0, elapsedTime: levelManager.elapsedTime ?? 0, cursor: levelManager.cursor ?? 0 }
+            : { index: 0, elapsedTime: 0, cursor: 0 },
+          player: {
+            x: player.x,
+            targetX: player.targetX,
+            hp: player.hp,
+            maxHp: player.maxHp,
+            fireCd: player.fireCd,
+            recoil: player.recoil,
+          },
+          road: {
+            scroll: road.scroll,
+            speed: road.speed,
+          },
+          bg: {
+            t: bg.t,
+          },
+          bullets: bullets.map((b) => ({ x: b.x, y: b.y, vy: b.vy, alive: b.alive, color: b.color })),
+          enemyBullets: enemyBullets.map((b) => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, alive: b.alive })),
+          enemies: enemies.map((e) => ({
+            x: e.x,
+            y: e.y,
+            vy: e.vy,
+            hp: e.hp,
+            maxHp: e.maxHp,
+            isBoss: !!e.isBoss,
+            alive: e.alive,
+            killed: e.killed,
+            exploded: e.exploded,
+            hitFlash: e.hitFlash,
+          })),
+        };
+      }
+
+      function saveGame() {
+        // Don't overwrite the last good save with a dead state.
+        if (player.hp <= 0) return;
+        const data = snapshotState();
+        try {
+          localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+        } catch {
+          // ignore (quota / privacy mode)
+        }
+      }
+
+      function applySave(data) {
+        bullets.length = 0;
+        enemyBullets.length = 0;
+        enemies.length = 0;
+        fx.items.length = 0;
+
+        score = data.score ?? 0;
+
+        const ps = data.player ?? {};
+        player.x = ps.x ?? 180;
+        player.targetX = ps.targetX ?? player.x;
+        player.hp = ps.hp ?? 100;
+        player.maxHp = ps.maxHp ?? 100;
+        player.fireCd = ps.fireCd ?? 0;
+        player.recoil = ps.recoil ?? 0;
+
+        const rs = data.road ?? {};
+        road.scroll = rs.scroll ?? 0;
+        road.speed = rs.speed ?? 230;
+
+        const bs = data.bg ?? {};
+        bg.t = bs.t ?? 0;
+
+        if (Array.isArray(data.bullets)) {
+          for (const b of data.bullets) {
+            const bb = new Bullet(b.x ?? 0, b.y ?? 0);
+            bb.vy = b.vy ?? -520;
+            bb.alive = b.alive ?? true;
+            bb.color = b.color ?? bb.color;
+            bullets.push(bb);
+          }
+        }
+
+        if (Array.isArray(data.enemyBullets)) {
+          for (const b of data.enemyBullets) {
+            const eb = new EnemyBullet(b.x ?? 0, b.y ?? 0, b.vx ?? 0, b.vy ?? 330);
+            eb.alive = b.alive ?? true;
+            enemyBullets.push(eb);
+          }
+        }
+
+        if (Array.isArray(data.enemies)) {
+          for (const e of data.enemies) {
+            const isBoss = !!e.isBoss;
+            const ee = isBoss
+              ? new Boss(e.x ?? road.randomRoadX(), e.y ?? -140, e.vy ?? 72, e.maxHp ?? e.hp ?? 100)
+              : new Enemy(e.x ?? road.randomRoadX(), e.y ?? -70, e.vy ?? rand(140, 210), e.maxHp ?? e.hp ?? randInt(3, 7));
+            ee.hp = e.hp ?? ee.hp;
+            ee.maxHp = e.maxHp ?? ee.maxHp;
+            ee.alive = e.alive ?? true;
+            ee.killed = e.killed ?? false;
+            ee.exploded = e.exploded ?? false;
+            ee.hitFlash = e.hitFlash ?? 0;
+            enemies.push(ee);
+          }
+        }
+
+        pointer.active = false;
+      }
+
+      function resetGame() {
+        bullets.length = 0;
+        enemyBullets.length = 0;
+        enemies.length = 0;
+        fx.items.length = 0;
+
+        score = 0;
+        saveAcc = 0;
+
+        player.x = 180;
+        player.targetX = 180;
+        player.hp = 100;
+        player.maxHp = 100;
+        player.fireCd = 0;
+        player.recoil = 0;
+
+        road.scroll = 0;
+        road.speed = 230;
+
+        bg.t = 0;
+        pointer.active = false;
+        if (levelManager) levelManager.resetTimeline();
+      }
+
+      function resetForNewLevel(opts = {}) {
+        const keepScore = !!opts.keepScore;
+        bullets.length = 0;
+        enemyBullets.length = 0;
+        enemies.length = 0;
+        fx.items.length = 0;
+        if (!keepScore) score = 0;
+        saveAcc = 0;
+        player.x = 180;
+        player.targetX = 180;
+        player.maxHp = 100;
+        player.hp = player.maxHp;
+        player.fireCd = 0;
+        player.recoil = 0;
+        road.scroll = 0;
+        road.speed = 230;
+        bg.t = 0;
+        pointer.active = false;
+      }
+
+      async function ensureLevelManager() {
+        if (levelManager) return levelManager;
+        levelManager = new LevelManager({
+          duration: 180,
+          autoSync: true,
+          syncInterval: 8,
+          completeDelay: 1.6,
+          onBossDefeatedFx: (boss) => {
+            if (!boss) return;
+            // Big neon explosion burst
+            fx.burst(boss.x, boss.y, {
+              count: 140,
+              speed: 260,
+              lifeA: 0.25,
+              lifeB: 0.95,
+              sizeA: 2,
+              sizeB: 10,
+              colors: ["#ffcf4a", "#ff3bd4", "#20f6ff", "#ffffff"],
+              glow: 22,
+              gravity: 240,
+            });
+            fx.burst(boss.x, boss.y, { count: 90, speed: 150, lifeA: 0.22, lifeB: 1.1, sizeA: 3, sizeB: 12, colors: ["#ffcf4a"], glow: 26, gravity: 190 });
+            enemyBullets.length = 0;
+          },
+          onComplete: () => {
+            // Pause game and show completion overlay
+            clearSave();
+            markLevelCompleted(levelManager?.levelIndex ?? 0);
+            const lvl = String((levelManager?.levelIndex ?? 0) + 1).padStart(3, "0");
+            showMenu({ title: "Level Complete", subtitle: `LEVEL ${lvl}`, mode: "levelComplete" });
+          },
+        });
+        return levelManager;
+      }
+
+      async function startLevel(levelIndex = 0, opts = {}) {
+        const mode = opts.mode ?? "new"; // "new" | "continue" | "restart" | "next"
+        if (mode === "new") {
+          clearSave();
+          resetForNewLevel({ keepScore: false });
+        } else if (mode === "restart") {
+          clearSave();
+          resetForNewLevel({ keepScore: true });
+        } else if (mode === "next") {
+          clearSave();
+          resetForNewLevel({ keepScore: true });
+        }
+
+        dialog.auto = false;
+        showMenu({ title: "Neon Road Shooter", subtitle: `Loading LEVEL ${String(levelIndex + 1).padStart(3, "0")}…`, mode: "loading" });
+
+        let lm = null;
+        try {
+          lm = await ensureLevelManager();
+          await lm.loadLevel(levelIndex);
+        } catch (err) {
+          console.error("Level load failed:", err);
+          const msg = (err && err.message) || String(err || "Unknown error");
+          const isFile = typeof location !== "undefined" && location && location.protocol === "file:";
+          const hint = isFile
+            ? "Похоже, страница открыта как file://. Браузер часто блокирует fetch() к Google Sheets из 'null origin'.\n\nЗапусти игру через локальный сервер:\n- PowerShell:  py -m http.server 8080\n- затем открой: http://localhost:8080"
+            : "Если ошибка про CORS/Failed to fetch — проверь интернет и что таблица опубликована (Published to web).";
+          showMenu({
+            title: "Load Failed",
+            subtitle: `Не удалось загрузить уровень из Google Sheets.\n\nПричина: ${msg}\n\n${hint}`,
+            mode: "main",
+          });
+          return;
+        }
+
+        // If continuing from save, restore timeline position after load
+        if (mode === "continue") {
+          const s = opts.saveData ?? null;
+          const ls = s?.level ?? {};
+          lm.levelIndex = ls.index ?? levelIndex;
+          lm.elapsedTime = ls.elapsedTime ?? 0;
+          lm.cursor = ls.cursor ?? 0;
+          lm.completed = false;
+          lm.boss = enemies.find((e) => e && e.isBoss) ?? null;
+        } else {
+          lm.resetTimeline();
+        }
+
+        hideMenu();
+        gameMode = "playing";
+      }
+
+      function startNewGame() {
+        // Play → open level select
+        showMenu({ title: "Select Level", subtitle: "Доступны пройденные уровни + следующий", mode: "levelSelect" });
+      }
+
+      function startContinue() {
+        const s = loadSave();
+        if (!s) return;
+        applySave(s);
+        const lvl = s.level?.index ?? 0;
+        startLevel(lvl, { mode: "continue", saveData: s });
+      }
+
+      function onMenuPrimary() {
+        if (menuMode === "levelComplete") {
+          const next = (levelManager?.levelIndex ?? 0) + 1;
+          startLevel(next, { mode: "next" });
+          return;
+        }
+        if (menuMode === "levelSelect") {
+          showMenu();
+          return;
+        }
+        if (menuMode === "loading") return;
+        startNewGame();
+      }
+      function onMenuSecondary() {
+        if (menuMode === "levelComplete") {
+          const cur = levelManager?.levelIndex ?? 0;
+          startLevel(cur, { mode: "restart" });
+          return;
+        }
+        if (menuMode === "levelSelect") return;
+        if (menuMode === "loading") return;
+        startContinue();
+      }
+
+      btnNewEl.addEventListener("click", onMenuPrimary);
+      btnContinueEl.addEventListener("click", onMenuSecondary);
+      addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && gameMode === "menu") {
+          if (menuMode === "levelComplete") onMenuPrimary();
+          else if (menuMode === "levelSelect") {
+            // Default to the highest unlocked level
+            const p = loadProgress();
+            const idx = clamp(p.maxCompleted + 1, 0, MAX_LEVELS - 1);
+            startLevel(idx, { mode: "new" });
+          }
+          else if (!btnContinueEl.disabled) onMenuSecondary();
+          else onMenuPrimary();
+        }
+        if ((e.key === "u" || e.key === "U") && gameMode === "playing") {
+          // manual sync now
+          if (levelManager) levelManager.syncLevelData();
+        }
+        if (e.key === "Escape" && gameMode === "playing") {
+          saveGame();
+          showMenu();
+        }
+      });
+      addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden" && gameMode === "playing") saveGame();
+      });
+      addEventListener("beforeunload", () => {
+        if (gameMode === "playing") saveGame();
+      });
+
+      const pointer = { active: false, x: player.x, y: player.y };
+      const hudMenuBtn = { x: 12, y: 640 - 12 - 34, w: 92, h: 34 };
+      function drawHudMenu(ctx) {
+        const x = hudMenuBtn.x;
+        const y = hudMenuBtn.y;
+        neonGlow(ctx, "rgba(32,246,255,0.25)", 12, () => {
+          ctx.fillStyle = "rgba(0,0,0,0.28)";
+          ctx.strokeStyle = "rgba(32,246,255,0.40)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(x, y, hudMenuBtn.w, hudMenuBtn.h, 12);
+          ctx.fill();
+          ctx.stroke();
+        });
+        ctx.save();
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.font = "800 12px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("МЕНЮ", x + hudMenuBtn.w / 2, y + hudMenuBtn.h / 2 + 0.5);
+        ctx.restore();
+      }
+      function hudMenuHit(v) {
+        return v.x >= hudMenuBtn.x && v.y >= hudMenuBtn.y && v.x <= hudMenuBtn.x + hudMenuBtn.w && v.y <= hudMenuBtn.y + hudMenuBtn.h;
+      }
+      const onPtrDown = (e) => {
+        e.preventDefault();
+        const v = screen.toVirtual(e.clientX, e.clientY);
+        // HUD button should trigger ONLY on click/tap (pointerdown), not on hover/move.
+        if (gameMode === "playing" && hudMenuHit(v)) {
+          saveGame();
+          showMenu();
+          pointer.active = false;
+          return;
+        }
+        pointer.active = true;
+        pointer.x = v.x;
+        pointer.y = v.y;
+        player.setTargetX(v.x);
+      };
+      const onPtrMove = (e) => {
+        if (!pointer.active) return;
+        e.preventDefault();
+        const v = screen.toVirtual(e.clientX, e.clientY);
+        pointer.x = v.x;
+        pointer.y = v.y;
+        player.setTargetX(v.x);
+      };
+      canvas.addEventListener("pointerdown", onPtrDown, { passive: false });
+      canvas.addEventListener("pointermove", onPtrMove, { passive: false });
+      canvas.addEventListener(
+        "pointerup",
+        () => {
+          pointer.active = false;
+        },
+        { passive: true }
+      );
+      canvas.addEventListener(
+        "pointercancel",
+        () => {
+          pointer.active = false;
+        },
+        { passive: true }
+      );
+
+      function spawnEnemy() {
+        enemies.push(new Enemy(road.randomRoadX(), -70, rand(140, 210), randInt(3, 7)));
+      }
+
+      function fire() {
+        for (const m of player.muzzlePoints) {
+          bullets.push(new Bullet(m.x, m.y));
+          // Muzzle flash
+          fx.burst(m.x, m.y, {
+            count: 10,
+            speed: 120,
+            lifeA: 0.05,
+            lifeB: 0.14,
+            sizeA: 2,
+            sizeB: 5,
+            colors: ["#ffcf4a", "#ff3bd4", "#20f6ff"],
+            glow: 18,
+          });
+        }
+        player.fired();
+      }
+
+      let last = performance.now();
+      function frame(now) {
+        const dt = Math.min(0.033, (now - last) / 1000);
+        last = now;
+
+        if (gameMode === "playing") {
+          // Update world
+          bg.update(dt, road.speed);
+          road.update(dt);
+          player.update(dt, road);
+          if (pointer.active) player.setTargetX(pointer.x);
+
+          // Auto fire
+          if (player.canFire()) fire();
+
+          // Level timeline (events from Google Sheets)
+          if (levelManager) levelManager.update(dt, road);
+
+          // Update entities
+          for (const b of bullets) b.update(dt);
+          for (const b of enemyBullets) b.update(dt);
+          for (const e of enemies) e.update(dt);
+
+          // Collisions: bullets vs enemies
+          for (const e of enemies) {
+            if (!e.alive) continue;
+            // Enemy becomes damageable only after it's fully on-screen.
+            if (!e.isFullyOnScreen(screen.vw, screen.vh)) continue;
+            for (const b of bullets) {
+              if (!b.alive) continue;
+              if (aabbIntersects(e.aabb, b.aabb)) {
+                b.alive = false;
+                e.damage(1, screen.vw, screen.vh);
+                fx.burst(b.x, b.y, {
+                  count: 8,
+                  speed: 120,
+                  lifeA: 0.08,
+                  lifeB: 0.22,
+                  sizeA: 2,
+                  sizeB: 4,
+                  colors: ["#ffcf4a", "#20f6ff", "#ff3bd4"],
+                  glow: 16,
+                  gravity: 160,
+                });
+              }
+            }
+          }
+
+          // Enemy death explosions
+          for (const e of enemies) {
+            if (e.killed && !e.exploded) {
+              e.exploded = true;
+              if (e.isBoss) {
+                score += 250;
+                enemyBullets.length = 0;
+                // extra boss pop (manager will handle delayed completion)
+                fx.burst(e.x, e.y, {
+                  count: 200,
+                  speed: 300,
+                  lifeA: 0.2,
+                  lifeB: 1.2,
+                  sizeA: 2,
+                  sizeB: 12,
+                  colors: ["#ffcf4a", "#ff3bd4", "#20f6ff", "#ffffff"],
+                  glow: 26,
+                  gravity: 260,
+                });
+                fx.burst(e.x, e.y, { count: 80, speed: 120, lifeA: 0.2, lifeB: 1.4, sizeA: 4, sizeB: 14, colors: ["#ffcf4a"], glow: 30, gravity: 200 });
+              } else {
+                score += 10;
+                fx.burst(e.x, e.y, {
+                  count: 30,
+                  speed: 170,
+                  lifeA: 0.18,
+                  lifeB: 0.6,
+                  sizeA: 2,
+                  sizeB: 7,
+                  colors: ["#ffcf4a", "#ff3bd4", "#20f6ff"],
+                  glow: 18,
+                  gravity: 220,
+                });
+                fx.burst(e.x, e.y, { count: 16, speed: 90, lifeA: 0.2, lifeB: 0.7, sizeA: 3, sizeB: 8, colors: ["#ffcf4a"], glow: 20 });
+              }
+            }
+          }
+
+          // Player vs enemy (light damage on contact)
+          for (const e of enemies) {
+            if (!e.alive) continue;
+            if (aabbIntersects(player.aabb, e.aabb)) {
+              player.hp = Math.max(0, player.hp - 18 * dt);
+              fx.burst(player.x, player.y - 10, { count: 6, speed: 90, lifeA: 0.05, lifeB: 0.16, sizeA: 2, sizeB: 4, colors: ["#ff3bd4"], glow: 14 });
+            }
+          }
+
+          // Enemy bullets vs player
+          for (const b of enemyBullets) {
+            if (!b.alive) continue;
+            if (aabbIntersects(player.aabb, b.aabb)) {
+              b.alive = false;
+              player.hp = Math.max(0, player.hp - 10);
+              fx.burst(b.x, b.y, { count: 10, speed: 120, lifeA: 0.08, lifeB: 0.25, sizeA: 2, sizeB: 5, colors: ["#ff3bd4", "#20f6ff"], glow: 16, gravity: 180 });
+            }
+          }
+
+          // Cleanup
+          for (let i = bullets.length - 1; i >= 0; i--) if (!bullets[i].alive) bullets.splice(i, 1);
+          for (let i = enemyBullets.length - 1; i >= 0; i--) if (!enemyBullets[i].alive) enemyBullets.splice(i, 1);
+          for (let i = enemies.length - 1; i >= 0; i--) if (!enemies[i].alive) enemies.splice(i, 1);
+
+          // Dialogue
+          dialog.update(dt, player.x, player.y);
+
+          // FX
+          fx.update(dt);
+
+          // Autosave (throttled)
+          saveAcc += dt;
+          if (saveAcc >= 1.0) {
+            saveAcc = 0;
+            saveGame();
+          }
+
+          // Game over → menu (clear save so "Continue" is not available)
+          if (player.hp <= 0) {
+            player.hp = 0;
+            clearSave();
+            showMenu({ title: "Game Over" });
+          }
+        }
+
+        // Render
+        if (gameMode === "playing") {
+          screen.beginFrame();
+          const ctx = screen.ctx;
+          bg.draw(ctx);
+          road.draw(ctx);
+
+          // Enemies
+          for (const e of enemies) e.draw(ctx);
+
+          // Bullets
+          for (const b of bullets) b.draw(ctx);
+          for (const b of enemyBullets) b.draw(ctx);
+
+          // Player
+          player.draw(ctx);
+
+          // Particles
+          fx.draw(ctx);
+
+          // UI + dialogues
+          ui.draw(ctx, player.hp / player.maxHp, {
+            levelProgress01: levelManager ? levelManager.progress01 : 0,
+            boss: levelManager ? levelManager.boss : null,
+            levelNet: levelManager
+              ? { lastFetchedAt: levelManager.lastFetchedAt || 0, lastUpdatedAt: levelManager.lastUpdatedAt || 0, lastSyncError: levelManager.lastSyncError || "" }
+              : null,
+          });
+          dialog.draw(ctx);
+
+          // Score (tiny)
+          ctx.save();
+          ctx.fillStyle = "rgba(255,255,255,0.65)";
+          ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+          ctx.fillText("SCORE " + score, 12, 52);
+          ctx.restore();
+
+          // HUD: menu button (bottom-left)
+          drawHudMenu(ctx);
+
+          // CRT overlay
+          crt.draw(ctx);
+        }
+
+        requestAnimationFrame(frame);
+      }
+
+      // Start on menu (do not auto-start the run)
+      resetGame();
+      showMenu();
+      requestAnimationFrame(frame);
+    </script>
+  </body>
+</html>
+
