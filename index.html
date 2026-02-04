@@ -1200,6 +1200,11 @@
           this.active = null;
           this.auto = true;
         }
+        reset(opts = {}) {
+          // Clear any currently displayed phrase so it doesn't leak between levels.
+          this.active = null;
+          this.cooldown = opts.cooldown ?? rand(1.0, 2.0);
+        }
         show(who, text, opts = {}) {
           const life = opts.life ?? 3.6;
           const ax = opts.anchorX ?? 180;
@@ -1883,6 +1888,7 @@
         enemyBullets.length = 0;
         enemies.length = 0;
         fx.items.length = 0;
+        if (dialog) dialog.reset();
         if (!keepScore) score = 0;
         saveAcc = 0;
         player.x = 180;
