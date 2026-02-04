@@ -235,20 +235,50 @@
         return `${url}${sep}cb=${Date.now()}`;
       }
 
-      async function fetchLevelData(url) {
+      function levelNumber(levelIndex) {
+        return (levelIndex | 0) + 1;
+      }
+
+      function levelLabel(levelIndex) {
+        return String(levelNumber(levelIndex));
+      }
+
+      async function fetchLevelData(url, levelIndex = null) {
         // cache-bust to avoid stale CSV after sheet edits
         const text = await fetchTextWithTimeout(withCacheBust(url), 12000);
         const { header, rows } = parseCsv(text);
 
-        const idx = (name) => header.findIndex((h) => h.toLowerCase() === name.toLowerCase());
+        const idx = (name) => header.findIndex((h) => String(h ?? "").trim().toLowerCase() === String(name ?? "").trim().toLowerCase());
+        const idxAny = (names) => {
+          for (const n of names) {
+            const i = idx(n);
+            if (i >= 0) return i;
+          }
+          return -1;
+        };
         const iTime = idx("Time (sec)");
         const iType = idx("Type");
         const iV1 = idx("Value 1 (Type/Who)");
         const iV2 = idx("Value 2 (HP/Text)");
         const iX = idx("X (0.0 to 1.0)");
+        // New single-sheet format: one sheet ("levels") with a column containing the level number.
+        // Support a few possible header names to be resilient to sheet tweaks.
+        const iLevel = idxAny(["Level", "LEVEL", "Lvl", "LVL", "Уровень", "Номер уровня", "Level #", "Level (num)"]);
 
         const events = [];
+        let currentLevel = null;
         for (const r of rows) {
+          if (iLevel >= 0) {
+            const rawLvl = String(r[iLevel] ?? "").trim();
+            if (rawLvl) {
+              const n = parseInt(rawLvl, 10);
+              currentLevel = Number.isFinite(n) ? n : null;
+            }
+            if (levelIndex !== null) {
+              const want = levelNumber(levelIndex);
+              if (!Number.isFinite(currentLevel) || currentLevel !== want) continue;
+            }
+          }
           const t = toNumber(r[iTime], NaN);
           const type = String(r[iType] ?? "").trim().toUpperCase();
           if (!Number.isFinite(t) || !type) continue;
@@ -1318,13 +1348,7 @@
       const SHEETS_PUB_URL =
         "https://docs.google.com/spreadsheets/d/e/2PACX-1vQOb_HXKPSQSdBSr-tULfElVcwgKz8lVfmxjKvAgCB69wIT3ai5diu6vZPlRj4GwDYRP0C8elwhcmX0/pub?output=csv";
       const MAX_LEVELS = 3;
-
-      function pad3(n) {
-        return String((n | 0) + 1).padStart(3, "0");
-      }
-      function levelSheetName(levelIndex) {
-        return `level${pad3(levelIndex)}`;
-      }
+      const LEVELS_SHEET_NAME = "levels";
       function extractSheetsKey(pubUrl) {
         const m = String(pubUrl || "").match(/spreadsheets\/d\/e\/([^/]+)/i);
         return m ? m[1] : null;
@@ -1362,8 +1386,8 @@
         return sheetGidMap;
       }
 
-      async function buildLevelCsvCandidates(levelIndex) {
-        const sheet = levelSheetName(levelIndex);
+      async function buildLevelsCsvCandidates() {
+        const sheet = LEVELS_SHEET_NAME;
         const candidates = [];
         const map = await ensureSheetGidMap();
         const gid = map ? map[String(sheet).toLowerCase()] : null;
@@ -1378,11 +1402,11 @@
       }
 
       async function fetchLevelDataForLevel(levelIndex) {
-        const urls = await buildLevelCsvCandidates(levelIndex);
+        const urls = await buildLevelsCsvCandidates();
         let lastErr = null;
         for (const url of urls) {
           try {
-            const data = await fetchLevelData(url);
+            const data = await fetchLevelData(url, levelIndex);
             // Basic sanity: must have some events
             if (data && Array.isArray(data.events) && data.events.length >= 1) {
               data.sourceUrl = url;
@@ -1625,7 +1649,7 @@
           const b = document.createElement("button");
           b.type = "button";
           b.className = "btn";
-          const num = pad3(i);
+          const num = levelLabel(i);
           const passed = i <= p.maxCompleted;
           const unlocked = i <= unlockedMax;
           b.textContent = passed ? `LEVEL ${num} ✓` : `LEVEL ${num}`;
@@ -1901,7 +1925,7 @@
             // Pause game and show completion overlay
             clearSave();
             markLevelCompleted(levelManager?.levelIndex ?? 0);
-            const lvl = String((levelManager?.levelIndex ?? 0) + 1).padStart(3, "0");
+            const lvl = levelLabel(levelManager?.levelIndex ?? 0);
             showMenu({ title: "Level Complete", subtitle: `LEVEL ${lvl}`, mode: "levelComplete" });
           },
         });
@@ -1922,7 +1946,7 @@
         }
 
         dialog.auto = false;
-        showMenu({ title: "Neon Road Shooter", subtitle: `Loading LEVEL ${String(levelIndex + 1).padStart(3, "0")}…`, mode: "loading" });
+        showMenu({ title: "Neon Road Shooter", subtitle: `Loading LEVEL ${levelLabel(levelIndex)}…`, mode: "loading" });
 
         let lm = null;
         try {
